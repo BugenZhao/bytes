@@ -1418,73 +1418,84 @@ unsafe impl BufMut for &mut [u8] {
     }
 }
 
-unsafe impl BufMut for Vec<u8> {
-    #[inline]
-    fn remaining_mut(&self) -> usize {
-        // A vector can never have more than isize::MAX bytes
-        core::isize::MAX as usize - self.len()
-    }
-
-    #[inline]
-    unsafe fn advance_mut(&mut self, cnt: usize) {
-        let len = self.len();
-        let remaining = self.capacity() - len;
-
-        assert!(
-            cnt <= remaining,
-            "cannot advance past `remaining_mut`: {:?} <= {:?}",
-            cnt,
-            remaining
-        );
-
-        self.set_len(len + cnt);
-    }
-
-    #[inline]
-    fn chunk_mut(&mut self) -> &mut UninitSlice {
-        if self.capacity() == self.len() {
-            self.reserve(64); // Grow the vec
+macro_rules! impl_buf_mut_for_vec {
+    () => {
+        #[inline]
+        fn remaining_mut(&self) -> usize {
+            // A vector can never have more than isize::MAX bytes
+            core::isize::MAX as usize - self.len()
         }
 
-        let cap = self.capacity();
-        let len = self.len();
+        #[inline]
+        unsafe fn advance_mut(&mut self, cnt: usize) {
+            let len = self.len();
+            let remaining = self.capacity() - len;
 
-        let ptr = self.as_mut_ptr();
-        unsafe { &mut UninitSlice::from_raw_parts_mut(ptr, cap)[len..] }
-    }
+            assert!(
+                cnt <= remaining,
+                "cannot advance past `remaining_mut`: {:?} <= {:?}",
+                cnt,
+                remaining
+            );
 
-    // Specialize these methods so they can skip checking `remaining_mut`
-    // and `advance_mut`.
-    fn put<T: super::Buf>(&mut self, mut src: T)
-    where
-        Self: Sized,
-    {
-        // In case the src isn't contiguous, reserve upfront
-        self.reserve(src.remaining());
+            self.set_len(len + cnt);
+        }
 
-        while src.has_remaining() {
-            let l;
-
-            // a block to contain the src.bytes() borrow
-            {
-                let s = src.chunk();
-                l = s.len();
-                self.extend_from_slice(s);
+        #[inline]
+        fn chunk_mut(&mut self) -> &mut UninitSlice {
+            if self.capacity() == self.len() {
+                self.reserve(64); // Grow the vec
             }
 
-            src.advance(l);
+            let cap = self.capacity();
+            let len = self.len();
+
+            let ptr = self.as_mut_ptr();
+            unsafe { &mut UninitSlice::from_raw_parts_mut(ptr, cap)[len..] }
         }
-    }
 
-    #[inline]
-    fn put_slice(&mut self, src: &[u8]) {
-        self.extend_from_slice(src);
-    }
+        // Specialize these methods so they can skip checking `remaining_mut`
+        // and `advance_mut`.
+        fn put<T: super::Buf>(&mut self, mut src: T)
+        where
+            Self: Sized,
+        {
+            // In case the src isn't contiguous, reserve upfront
+            self.reserve(src.remaining());
 
-    fn put_bytes(&mut self, val: u8, cnt: usize) {
-        let new_len = self.len().checked_add(cnt).unwrap();
-        self.resize(new_len, val);
-    }
+            while src.has_remaining() {
+                let l;
+
+                // a block to contain the src.bytes() borrow
+                {
+                    let s = src.chunk();
+                    l = s.len();
+                    self.extend_from_slice(s);
+                }
+
+                src.advance(l);
+            }
+        }
+
+        #[inline]
+        fn put_slice(&mut self, src: &[u8]) {
+            self.extend_from_slice(src);
+        }
+
+        fn put_bytes(&mut self, val: u8, cnt: usize) {
+            let new_len = self.len().checked_add(cnt).unwrap();
+            self.resize(new_len, val);
+        }
+    };
+}
+
+#[cfg(feature = "allocator")]
+unsafe impl<A: core::alloc::Allocator> BufMut for Vec<u8, A> {
+    impl_buf_mut_for_vec!();
+}
+#[cfg(not(feature = "allocator"))]
+unsafe impl BufMut for Vec<u8> {
+    impl_buf_mut_for_vec!();
 }
 
 // The existence of this function makes the compiler catch if the BufMut
